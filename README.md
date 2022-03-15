@@ -6,4 +6,4 @@ This project illustates a kind of adaptive fixed-wing autopilot which is based o
 2. Greater robustness and adaptability. The new autopilot framework has greater robustness and adaptability to the uncertainties, such as payload mass change, wind disturbance, etc..
 
 We plug the adaptive module into five controllers, they are TECS throttle demand controller, TECS pitch demand controller, Roll controller, Pitch controller and yaw controller.
-![loop](C:\Users\DELL\Desktop\loop.jpg)
+![loop](https://github.com/Friend-Peng/Adaptive-ArduPilot-Autopilot/blob/main/loop.jpg)
