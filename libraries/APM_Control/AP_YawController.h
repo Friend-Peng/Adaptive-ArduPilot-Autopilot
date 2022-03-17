@@ -55,9 +55,9 @@ private:
 	float _last_rate_hp_in;
 	float _K_D_last;
 
-	float _asmc_alfa=  0.021514;
-	float _sat_eps=0.000102;
-	float _eta = 0.0001;
+	float _asmc_alfa= 0.001;
+	float _sat_eps=0.001;
+	float _eta = 1;
 	
 	// yaw ASMC controller integraor parameter, the upper saturation limit can be tuned by _satYaw, the lower limit is 0
 	float _intK0Yaw = 0.00001;
