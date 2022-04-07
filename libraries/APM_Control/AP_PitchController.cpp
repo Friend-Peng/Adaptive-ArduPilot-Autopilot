@@ -274,7 +274,7 @@ int32_t AP_PitchController::_get_rate_out(float desired_rate, float scaler, bool
 
 	_last_out += _pid_info.I;
 	
-    // Add adaptive-robust rule term, and airspeed above min value to make sure takeoff
+    // Add adaptive-robust rule term, and airspeed above min value
 	if (_switch == 1 && aspeed > 1.8 * float(aparm.airspeed_min)) 
 	{
 		float adaptive_robust_value = _update_pitch_adaptive_robust_rule(_last_out,  _pid_info.P, _pid_info.D, _pid_info.I, delta_time);
