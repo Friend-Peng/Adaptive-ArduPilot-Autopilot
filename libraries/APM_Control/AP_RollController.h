@@ -69,6 +69,14 @@ private:
 
 	float _asmc_alfa=158.298;
 	float _sat_eps= 1000.0;
+    
+    float _lambda3Roll =   0.001;
+	float _gammaRoll =    0.001;
+    float _varepsRoll =   10.0;
+	float _upsilonRoll =   1000.0;
+	float _betaRoll =     158.298;
+	float _vRoll =     0.99;
+	float _sigmaRoll =    0.001;
 	
 	// roll ASMC controller integraor parameter, the upper saturation limit can be tuned by _satRoll, the lower limit is 0
 	float _intK0Roll = 0.00001;

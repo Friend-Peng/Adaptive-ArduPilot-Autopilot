@@ -29,7 +29,8 @@ public:
 	float saturation(float x);
 	float sign(float x);
 	float _update_pitch_adaptive_robust_rule(float pid_sum, float error, float error_dot, float error_int, float delta_time);
-
+    float _update_pitch_finite_time_adaptive_rule(float pid_sum, float error, float error_dot, float error_int, float delta_time);
+    
 	void reset_I();
 
     /*
@@ -64,6 +65,13 @@ private:
 	float _asmc_alfa=10.147;
 	float _sat_eps= 420.185;
 
+    float _lambda3Pitch =  0.001;
+	float _gammaPitch =   0.001;
+    float _varepsPitch =    10.0;
+	float _upsilonPitch =    420.185;
+	float _betaPitch =       10.147;
+	float _vPitch =   0.8;
+	float _sigmaPitch =  3.6;
 
 	// pitch ASMC controller integraor parameter, the upper saturation limit can be tuned by _satPitch, the lower limit is 0
 	float _intK0Pitch = 0.00001;

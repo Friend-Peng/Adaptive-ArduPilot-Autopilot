@@ -182,7 +182,7 @@ int32_t AP_PitchController::_get_rate_out(float desired_rate, float scaler, bool
     _pid_info.target = desired_rate;
     _pid_info.actual = achieved_rate;
 
-	uint32_t _switch = 1;  //  0  original,     1  adaptive
+	uint32_t _switch = 2;  //  0  original,     1  adaptive    2  finite-time
 	
 	// Multiply pitch rate error by _ki_rate and integrate
 	// Scaler is applied before integrator so that integrator state relates directly to elevator deflection
@@ -288,6 +288,20 @@ int32_t AP_PitchController::_get_rate_out(float desired_rate, float scaler, bool
 		}
 	    _last_out += adaptive_robust_value;
 	}
+    
+    if (_switch == 2  && aspeed > 1.8 * aparm.airspeed_min)
+	{
+		float adpative_finite_time_value = _update_pitch_finite_time_adaptive_rule(_last_out, _pid_info.P, _pid_info.D, _pid_info.I, delta_time);
+		if (_last_out < -45)
+		{
+			adpative_finite_time_value = MAX(adpative_finite_time_value , 0);
+		}
+		else if (_last_out > 45)
+		{
+			adpative_finite_time_value = MIN(adpative_finite_time_value, 0);
+		}
+		_last_out += adpative_finite_time_value;
+	}
 	
 
     /*
@@ -312,6 +326,77 @@ int32_t AP_PitchController::_get_rate_out(float desired_rate, float scaler, bool
     
 	// Convert to centi-degrees and constrain
 	return constrain_float(_last_out * 100, -4500, 4500);
+}
+
+/*
+  Get pitch finite-time adaptive rule term
+ */
+float AP_PitchController::_update_pitch_finite_time_adaptive_rule(float pid_sum, float error, float error_dot, float error_int, float delta_time)
+{
+	// Calculate the adaptive_robust_rule to better deal with the uncertainties.
+	// tau = s + rho*sign(s); rho = K0 + K1*||xi|| + K2*||xi||^2; K_i_dot = ||s|| * ||xi||^i - alfa * K_i^v, i = 0,1,2;
+	// xi = [error, error_dot, error_int];
+
+	float error_delta = 0;
+	float alpha1 = 0;
+    float alpha2 = 0;
+	if (fabs(error)>_varepsPitch)
+	{
+		error_delta = pow(fabs(error), _gammaPitch)*sign(error);
+	}
+	else
+	{
+		alpha1 = (2-_gammaPitch)* pow(_varepsPitch, _gammaPitch-1);
+	    alpha2 = (_gammaPitch-1)* pow(_varepsPitch, _gammaPitch-2);
+		error_delta = alpha1*error + alpha2*sign(error)*pow(error, 2);
+	}
+
+	
+	float s       = pid_sum + _lambda3Pitch*error_delta; // s = error +  error_dot +  error_int + _lambda3Pitch*error_delta;
+	float norm_xi = sqrt((fabs(error)+pow(fabs(error), _gammaPitch))*(fabs(error)+pow(fabs(error), _gammaPitch)) + error_dot*error_dot + error_int*error_int);
+	float norm_s  = fabs(s);
+	
+	// Calculate sign(s), but avoid chattering
+	float sat_s = saturation(s / _upsilonPitch);
+ 	float rho = _intK0Pitch + _intK1Pitch * norm_xi + _intK2Pitch * norm_xi*norm_xi;
+
+	if (delta_time > 0) {
+		float intK0_delta = (norm_s - _betaPitch * pow(_intK0Pitch,_vPitch)) * delta_time;
+		float intK1_delta = (norm_s * norm_xi - _betaPitch * pow(_intK1Pitch,_vPitch)) * delta_time;
+		float intK2_delta = (norm_s * norm_xi*norm_xi - _betaPitch * pow(_intK2Pitch,_vPitch)) * delta_time;
+		// prevent the integrator from increasing if surface defln demand is above the upper limit
+		if (_last_out < -45 || _last_out > 45) {
+		float intK0_delta_temp = - _betaPitch * pow(_intK0Pitch,_vPitch) * delta_time;  //keep nagative     ruguo  lianggezhi xiangjia zhihou, meiyou fashengbaohe,  name jiubuyong decrease
+		float intK1_delta_temp = - _betaPitch * pow(_intK1Pitch,_vPitch) * delta_time;
+		float intK2_delta_temp = - _betaPitch * pow(_intK2Pitch,_vPitch) * delta_time;
+		float _intK0Pitch_temp = _intK0Pitch; _intK0Pitch_temp += intK0_delta_temp;
+		float _intK1Pitch_temp = _intK1Pitch; _intK1Pitch_temp += intK1_delta_temp;
+		float _intK2Pitch_temp = _intK2Pitch; _intK2Pitch_temp += intK2_delta_temp;
+		float rho_temp = _intK0Pitch_temp + _intK1Pitch_temp * norm_xi + _intK2Pitch_temp * norm_xi*norm_xi;
+		float _last_out_temp = _lambda3Pitch*error_delta +  rho_temp * sat_s + _sigmaPitch*pow(fabs(s),_vPitch)*sign(s);;   // printf("pitch 111111111111\n");
+		if (_last_out_temp < -45 || _last_out_temp > 45)
+		{
+			intK0_delta  = intK0_delta_temp;
+			intK1_delta  = intK1_delta_temp;
+			intK2_delta  = intK2_delta_temp;
+		}
+	}  
+	
+		_intK0Pitch += intK0_delta;
+		_intK1Pitch += intK1_delta;
+		_intK2Pitch += intK2_delta;
+		if (_intK0Pitch < 0) {
+		_intK0Pitch = 0;
+		}
+		if (_intK1Pitch < 0) {
+		_intK1Pitch = 0;
+		}
+		if (_intK2Pitch < 0) {
+		_intK2Pitch = 0;
+		}
+	}
+
+	return _lambda3Pitch*error_delta + rho*sat_s + _sigmaPitch*pow(fabs(s),_vPitch)*sign(s);
 }
 
 /*
