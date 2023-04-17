@@ -636,6 +636,89 @@ float AP_TECS::sign(float x)
 }
 
 /*
+  Get throttle finite-time adaptive rule term
+ */
+float AP_TECS::_update_throttle_finite_time_adaptive_rule(float pid_sum, float error, float error_dot, float error_int)
+{
+	// Calculate the adaptive_robust_rule to better deal with the uncertainties.
+	// tau = s + rho*sign(s) + sigma*sig^v(s); rho = K0 + K1*||xi|| + K2*||xi||^2; K_i_dot = ||s|| * ||xi||^i - alfa * K_i^v, i = 0,1,2;
+	// xi = [error, error_dot, error_int];
+
+	float error_delta = 0;
+	float alpha1 = 0;
+    float alpha2 = 0;
+	if (fabs(error)>_varepsThrottle)
+	{
+		error_delta = pow(fabs(error), _gammaThrottle)*sign(error);
+	}
+	else
+	{
+	    alpha1 = (2-_gammaThrottle)* pow(_varepsThrottle, _gammaThrottle-1);
+	    alpha2 = (_gammaThrottle-1)* pow(_varepsThrottle, _gammaThrottle-2);
+		error_delta = alpha1*error + alpha2*sign(error)*pow(error, 2);
+	}
+	
+
+	float s       = pid_sum + _lambda3Throttle*error_delta;  s = error +  error_dot +  error_int + _lambda3Throttle*error_delta;
+	float norm_xi = sqrt((fabs(error)+pow(fabs(error), _gammaThrottle))*(fabs(error)+pow(fabs(error), _gammaThrottle)) + error_dot*error_dot + error_int*error_int);
+	float norm_s  = fabs(s);
+
+	// Calculate sign(s), but avoid chattering
+	float sat_s = saturation(s / _upsilonThrottle);
+ 	float rho = _intK0Thr + _intK1Thr * norm_xi + _intK2Thr * norm_xi*norm_xi;
+	static float last_finite_time_term = 0;
+	float adaptive_term = 0;
+
+	float intK0_delta = (norm_s - _betaThrottle * pow(_intK0Thr,_vThrottle)) * _DT;
+	float intK1_delta = (norm_s * norm_xi - _betaThrottle * pow(_intK1Thr,_vThrottle)) * _DT;
+	float intK2_delta = (norm_s * norm_xi*norm_xi - _betaThrottle * pow(_intK2Thr,_vThrottle)) * _DT;
+	
+	if(_saturationFlag == 0)   // throttle is beginning stop going down and ready to go up,  but we also should avoid K increase too much, to prevent overshoot
+	{
+		if(intK0_delta  > 0) {intK0_delta =  0;}// - 1*_thrEta*_asmc_thrAlfa * _intK0Thr* _DT;}
+		if(intK1_delta  > 0) {intK1_delta =   0;}//  - 1*_thrEta*_asmc_thrAlfa * _intK1Thr* _DT;}
+		if(intK2_delta  > 0) {intK2_delta =   0;}//   - 1*_thrEta*_asmc_thrAlfa * _intK2Thr* _DT;}
+	}
+	else if (_saturationFlag == 1)   
+	{
+		if(intK0_delta  < 0) {intK0_delta =     norm_s * _DT;}
+		if(intK1_delta  < 0) {intK1_delta =       norm_s * norm_xi * _DT;}
+		if(intK2_delta  < 0) {intK2_delta =        norm_s * norm_xi*norm_xi * _DT;}
+	}
+	
+	_intK0Thr += intK0_delta;  
+	_intK1Thr += intK1_delta;
+	_intK2Thr += intK2_delta;
+	if (_intK0Thr < 0) {
+		_intK0Thr = 0;
+	}
+	if (_intK1Thr < 0) {
+		_intK1Thr = 0;
+	}
+	if (_intK2Thr < 0) {
+		_intK2Thr = 0;
+	}
+
+
+	adaptive_term = _lambda3Throttle*error_delta + rho*sat_s + _sigmaThrottle*pow(fabs(s),_vThrottle)*sign(s);    //  if(last_finite_time_term > (1-error- error_dot)*1.5) {last_finite_time_term = (1-error- error_dot)*1.5;}   //0.2
+	float v= _sigmaThrottle*pow(fabs(s),_vThrottle)*sign(s) ;
+	
+	if (aparm.throttle_slewrate != 0) {
+	float THRminf_clipped_to_zero = constrain_float(_THRminf, 0, _THRmaxf);
+	float thrRateIncr = _DT * (_THRmaxf - THRminf_clipped_to_zero) * aparm.throttle_slewrate * 0.01f;
+
+	adaptive_term = constrain_float(adaptive_term,
+									last_finite_time_term - 0.5*thrRateIncr,
+									last_finite_time_term + 0.5*thrRateIncr);
+	last_finite_time_term = adaptive_term;
+	}
+	
+	printf("pid %f, e %f, e_dot %f,  e_int %f, lambda %f,  rho*sat_s %f,  rho  %f, _intK0Thr  %f,   _intK1Thr %f,  _intK2Thr %f,  sat_s %f,  v %f,  finite_time_term %f, _height %f \n" , \
+					(double)pid_sum, (double)error, (double)error_dot, (double)error_int , (double)_lambda3Throttle*error_delta, (double)rho*sat_s, rho ,  _intK0Thr , _intK1Thr ,  _intK2Thr, sat_s, (double)v , (double)last_finite_time_term, _height);
+	return adaptive_term;
+}
+
+/*
   Get throttle adaptive robust rule term
  */
 float AP_TECS::_update_throttle_adaptive_robust_rule(float pid_sum, float error, float error_dot, float error_int)
@@ -767,8 +850,8 @@ void AP_TECS::_update_throttle_with_airspeed(void)
         }
         _throttle_dem = (_STE_error + STEdot_error * throttle_damp) * K_STE2Thr + ff_throttle;
 		float  PD0 = _throttle_dem;
-		uint32_t _switch =  1  ;//  0  original,     1  adaptive
-
+		uint32_t _switch =  2  ;  //  0  original,     1  adaptive      2  finite-time
+        static float last_adaptive_term = 0;
 
         // Constrain throttle demand
         _throttle_dem = constrain_float(_throttle_dem, _THRminf, _THRmaxf);
@@ -778,7 +861,7 @@ void AP_TECS::_update_throttle_with_airspeed(void)
         // Calculate integrator state upper and lower limits
         // Set to a value that will allow 0.1 (10%) throttle saturation to allow for noise on the demand
         // Additionally constrain the integrator state amplitude so that the integrator comes off limits faster.
-		float maxAmp = 0.5f*(_THRmaxf - THRminf_clipped_to_zero);
+		float maxAmp = 0.5f*(_THRmaxf - THRminf_clipped_to_zero   + _gainThr*last_adaptive_term);
 		float integ_max = constrain_float((_THRmaxf - _throttle_dem + 0.1f),-maxAmp,maxAmp);
 		float integ_min = constrain_float((_THRminf - _throttle_dem -0.1f),-maxAmp,maxAmp);
 		
@@ -837,7 +920,7 @@ void AP_TECS::_update_throttle_with_airspeed(void)
         _throttle_dem = _throttle_dem + _integTHR_state;
 
 		// Add adaptive-robust rule term
-		if ( _switch == 1 )
+		if ( _switch ！= 0 )
 		{
 			float PID = _throttle_dem;     flag_takeoff = flag_takeoff * 1;
 			_throttle_dem = constrain_float(_throttle_dem, _THRminf, _THRmaxf);
@@ -846,9 +929,21 @@ void AP_TECS::_update_throttle_with_airspeed(void)
 			float e_dot = STEdot_error * throttle_damp * K_STE2Thr    * fabs(p1 * p2);
 			float e_int = _integTHR_state      * p2;
 			
-			// Add  adaptive rule term
-			float adpative_robust_value = _update_throttle_adaptive_robust_rule(_throttle_dem, e,  e_dot,  e_int);   
-			_throttle_dem = _throttle_dem + adpative_robust_value; 
+            if ( _switch == 1 )
+			{
+                // Add  adaptive rule term
+                float adpative_robust_value = _update_throttle_adaptive_robust_rule(_throttle_dem, e,  e_dot,  e_int);   
+                _throttle_dem = _throttle_dem + adpative_robust_value; 
+                last_adaptive_term = adpative_robust_value; 
+            }
+            
+            if ( _switch == 2 )
+			{
+				// Add finite time adaptive rule term
+				float adaptive_finite_time_value = _update_throttle_finite_time_adaptive_rule(_throttle_dem, e,  e_dot,  e_int);   
+				_throttle_dem = _throttle_dem + adaptive_finite_time_value;
+				last_adaptive_term = adaptive_finite_time_value;	
+			}
 		}
     }
 
@@ -938,6 +1033,86 @@ void AP_TECS::_detect_bad_descent(void)
         _flags.badDescent = false;
     }
 }
+
+/*
+  Get pitch finite-time adaptive rule term
+ */
+float AP_TECS::_update_pitch_finite_time_adaptive_rule(float pid_sum, float error, float error_dot, float error_int)
+{
+	// Calculate the adaptive_robust_rule to better deal with the uncertainties.
+	// tau = s + rho*sign(s); rho = K0 + K1*||xi|| + K2*||xi||^2; K_i_dot = ||s|| * ||xi||^i - alfa * K_i^v, i = 0,1,2;
+	// xi = [error, error_dot, error_int];
+
+	float error_delta = 0;
+	float alpha1 = 0;
+    float alpha2 = 0;
+	if (fabs(error)>_varepsPitch)
+	{
+		error_delta = pow(fabs(error), _gammaPitch)*sign(error);
+	}
+	else
+	{
+		alpha1 = (2-_gammaPitch)* pow(_varepsPitch, _gammaPitch-1);
+	    alpha2 = (_gammaPitch-1)* pow(_varepsPitch, _gammaPitch-2);
+		error_delta = alpha1*error + alpha2*sign(error)*pow(error, 2);
+	}
+
+	
+	float s       = pid_sum + _lambda3Pitch*error_delta;  s = error +  error_dot +  error_int + _lambda3Pitch*error_delta;
+	float norm_xi = sqrt((fabs(error)+pow(fabs(error), _gammaPitch))*(fabs(error)+pow(fabs(error), _gammaPitch)) + error_dot*error_dot + error_int*error_int);
+	float norm_s  = fabs(s);
+	
+	// Calculate sign(s), but avoid chattering
+	float sat_s = saturation(s / _upsilonPitch);
+ 	float rho = _intK0Pitch + _intK1Pitch * norm_xi + _intK2Pitch * norm_xi*norm_xi;
+
+// Calculate rho
+	float gainInv = (_TAS_state * timeConstant() * GRAVITY_MSS);
+	
+	float intK0_delta = (norm_s - _betaPitch * pow(_intK0Pitch,_vPitch)) * _DT;
+	float intK1_delta = (norm_s * norm_xi - _betaPitch * pow(_intK1Pitch,_vPitch)) * _DT;
+	float intK2_delta = (norm_s * norm_xi*norm_xi - _betaPitch * pow(_intK2Pitch,_vPitch)) * _DT;
+	
+	float integ_min = (gainInv * (_PITCHminf - 0.0783f)) - s;
+    float integ_max = (gainInv * (_PITCHmaxf + 0.0783f)) - s;
+    float integ_range = integ_max - integ_min;
+	intK0_delta = constrain_float(intK0_delta, -integ_range*0.1f, integ_range*0.1f);
+	intK1_delta = constrain_float(intK1_delta, -integ_range*0.1f, integ_range*0.1f);
+	intK2_delta = constrain_float(intK2_delta, -integ_range*0.1f, integ_range*0.1f);
+	
+	float integK0_min = MIN(integ_min, _intK0Pitch);
+	float integK0_max = MAX(integ_max, _intK0Pitch);
+	float integK1_min = MIN(integ_min, _intK1Pitch);
+	float integK1_max = MAX(integ_max, _intK1Pitch);
+	float integK2_min = MIN(integ_min, _intK2Pitch);
+	float integK2_max = MAX(integ_max, _intK2Pitch);
+	
+	_intK0Pitch += intK0_delta;
+	_intK1Pitch += intK1_delta;
+	_intK2Pitch += intK2_delta;
+	_intK0Pitch = constrain_float(_intK0Pitch, integK0_min, integK0_max);
+	_intK1Pitch = constrain_float(_intK1Pitch, integK1_min, integK1_max);
+	_intK2Pitch = constrain_float(_intK2Pitch, integK2_min, integK2_max);
+	if (_intK0Pitch < 0) {
+	_intK0Pitch = 0;
+	}
+	if (_intK1Pitch < 0) {
+	_intK1Pitch = 0;
+	}
+	if (_intK2Pitch < 0) {
+	_intK2Pitch = 0;
+	}
+
+
+
+
+
+    static float last_finite_time_term = 0;
+		
+	last_finite_time_term = _lambda3Pitch*error_delta + rho*sat_s + _sigmaPitch*pow(fabs(s),_vPitch)*sign(s);
+	return last_finite_time_term;
+}
+
 
 /*
   Get pitch adaptive robust rule term
@@ -1034,7 +1209,7 @@ void AP_TECS::_update_pitch(void)
     float SEB_error    = SEB_dem - (_SPE_est * SPE_weighting - _SKE_est * SKE_weighting);
     float SEBdot_error = SEBdot_dem - (_SPEdot * SPE_weighting - _SKEdot * SKE_weighting);
 
-    uint32_t _switch =  1  ;//  0  original,     1  adaptive
+    uint32_t _switch =  2  ;//  0  original,     1  adaptive      2  finite-time
 
     logging.SKE_error = _SKE_dem - _SKE_est;
     logging.SPE_error = _SPE_dem - _SPE_est;
@@ -1131,17 +1306,27 @@ void AP_TECS::_update_pitch(void)
 	
 	
 	// adaptive-robust rule term
-	if (_switch == 1 )
+	if (_switch != 0 )
 	{
 		_pitch_dem = constrain_float(_pitch_dem, _PITCHminf, _PITCHmaxf);
 		float p1 = (fabs(PID0-_pitch_dem)>0.01)  ?  _pitch_dem / PID0 :  1;
-		float e = p1*(SEB_error + 0.5*SEBdot_dem * timeConstant())/gainInv;
+		float e = p1*SEB_error/gainInv;
 		float e_dot = p1*(SEBdot_error * pitch_damp) / gainInv;
 		float e_int = _integSEB_state / gainInv;
 		
-		//calculate adaptive robust term
-		float adpative_robust_value = _update_pitch_adaptive_robust_rule(_pitch_dem, e, e_dot, e_int);
-		_pitch_dem  = _pitch_dem + adpative_robust_value;
+        if(_switch == 1 )
+		{
+            //calculate adaptive robust term
+            float adpative_robust_value = _update_pitch_adaptive_robust_rule(_pitch_dem, e, e_dot, e_int);
+            _pitch_dem  = _pitch_dem + adpative_robust_value;
+        }
+        
+        if(_switch == 2 )
+		{
+			//calculate finite time rule
+			float adpative_finite_time_value = _update_pitch_finite_time_adaptive_rule(_pitch_dem, e, e_dot, e_int);
+			_pitch_dem = _pitch_dem + adpative_finite_time_value;
+		}
 		
 		if ((_pitch_dem - _last_pitch_dem) > ptchRateIncr)
 		{
