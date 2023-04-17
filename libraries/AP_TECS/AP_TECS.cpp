@@ -851,7 +851,6 @@ void AP_TECS::_update_throttle_with_airspeed(void)
         _throttle_dem = (_STE_error + STEdot_error * throttle_damp) * K_STE2Thr + ff_throttle;
 		float  PD0 = _throttle_dem;
 		uint32_t _switch =  2  ;  //  0  original,     1  adaptive      2  finite-time
-        static float last_adaptive_term = 0;
 
         // Constrain throttle demand
         _throttle_dem = constrain_float(_throttle_dem, _THRminf, _THRmaxf);
@@ -861,7 +860,7 @@ void AP_TECS::_update_throttle_with_airspeed(void)
         // Calculate integrator state upper and lower limits
         // Set to a value that will allow 0.1 (10%) throttle saturation to allow for noise on the demand
         // Additionally constrain the integrator state amplitude so that the integrator comes off limits faster.
-		float maxAmp = 0.5f*(_THRmaxf - THRminf_clipped_to_zero   + _gainThr*last_adaptive_term);
+		float maxAmp = 0.5f*(_THRmaxf - THRminf_clipped_to_zero);
 		float integ_max = constrain_float((_THRmaxf - _throttle_dem + 0.1f),-maxAmp,maxAmp);
 		float integ_min = constrain_float((_THRminf - _throttle_dem -0.1f),-maxAmp,maxAmp);
 		
@@ -934,7 +933,6 @@ void AP_TECS::_update_throttle_with_airspeed(void)
                 // Add  adaptive rule term
                 float adpative_robust_value = _update_throttle_adaptive_robust_rule(_throttle_dem, e,  e_dot,  e_int);   
                 _throttle_dem = _throttle_dem + adpative_robust_value; 
-                last_adaptive_term = adpative_robust_value; 
             }
             
             if ( _switch == 2 )
@@ -942,7 +940,6 @@ void AP_TECS::_update_throttle_with_airspeed(void)
 				// Add finite time adaptive rule term
 				float adaptive_finite_time_value = _update_throttle_finite_time_adaptive_rule(_throttle_dem, e,  e_dot,  e_int);   
 				_throttle_dem = _throttle_dem + adaptive_finite_time_value;
-				last_adaptive_term = adaptive_finite_time_value;	
 			}
 		}
     }
