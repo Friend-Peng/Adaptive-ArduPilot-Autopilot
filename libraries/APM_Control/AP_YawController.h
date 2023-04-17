@@ -37,6 +37,7 @@ public:
 	float saturation(float x);
 	float sign(float x);
 	float _update_yaw_adaptive_robust_rule(float pid_sum, float error, float error_dot, float delta_time);
+    float _update_yaw_finite_time_adaptive_rule(float pid_sum, float error_dot, float error_int, float delta_time);
 	
 	const AP_Logger::PID_Info& get_pid_info(void) const {return _pid_info; }
 
@@ -58,6 +59,14 @@ private:
 	float _asmc_alfa= 0.001;
 	float _sat_eps=0.001;
 	float _eta = 1;
+    
+    float _lambda3Yaw =   0.001;
+	float _gammaYaw =   0.001;
+    float _varepsYaw =   10.0;
+	float _upsilonYaw =   0.001;
+	float _betaYaw =    0.001;
+	float _vYaw =   0.472179;
+	float _sigmaYaw =  1.4;
 	
 	// yaw ASMC controller integraor parameter, the upper saturation limit can be tuned by _satYaw, the lower limit is 0
 	float _intK0Yaw = 0.00001;
