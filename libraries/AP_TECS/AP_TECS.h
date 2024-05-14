@@ -190,6 +190,23 @@ private:
 	float _sat_pitchEps = 44.339;
 	
 	uint32_t _saturationFlag = 2;
+    
+    // finite-time control
+	float _lambda3Throttle =  0.001;
+	float _gammaThrottle =  0.001;
+	float _varepsThrottle = 10.0;
+	float _upsilonThrottle =    10.407;
+	float _betaThrottle = 0.00115;
+	float _vThrottle = 0.013785;
+	float _sigmaThrottle = 0.038116;
+
+	float _lambda3Pitch =  0.001;
+	float _gammaPitch =  0.001;
+    float _varepsPitch = 10.0;
+	float _upsilonPitch =   44.339;
+	float _betaPitch =   4.2155;
+	float _vPitch =   0.471472 ;
+	float _sigmaPitch =   0.05;
 	
     enum {
         OPTION_GLIDER_ONLY=(1<<0),
@@ -404,7 +421,13 @@ private:
 
 	// Get pitch adaptive robust rule term
 	float _update_pitch_adaptive_robust_rule(float pid_sum, float error, float error_dot, float error_int);
-	
+    
+    // Get throttle finite-time adaptive rule term
+	float _update_throttle_finite_time_adaptive_rule(float pid_sum, float error, float error_dot, float error_int);
+
+	// Get pitch finite-time adaptive rule term
+	float _update_pitch_finite_time_adaptive_rule(float pid_sum, float error, float error_dot, float error_int);
+
     // Update Demanded Throttle
     void _update_throttle_with_airspeed(void);
 

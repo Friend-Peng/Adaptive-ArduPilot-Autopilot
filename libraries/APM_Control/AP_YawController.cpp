@@ -143,7 +143,7 @@ int32_t AP_YawController::get_servo_out(float scaler, bool disable_integrator)
 	//Calculate input to integrator
 	float integ_in = - _K_I * (_K_A * accel_y + rate_hp_out);
 
-	uint32_t _switch = 1;  //  0  original,     1  adaptive
+	uint32_t _switch = 2;  //  0  original,     1  adaptive   2  finite-time
 	
 	// Apply integrator, but clamp input to prevent control saturation and freeze integrator below min FBW speed
 	// Don't integrate if in stabilise mode as the integrator will wind up against the pilots inputs
@@ -206,6 +206,20 @@ int32_t AP_YawController::get_servo_out(float scaler, bool disable_integrator)
 		}
 		_last_out += adpative_robust_value;
 	}
+    
+    if (_switch == 2 )
+	{
+		float adpative_finite_time_value = _update_yaw_finite_time_adaptive_rule(_last_out, _pid_info.D, _pid_info.I, delta_time);
+		if (_last_out < -45)
+		{
+			adpative_finite_time_value = MAX(adpative_finite_time_value , 0);
+		}
+		else if (_last_out > 45)
+		{
+			adpative_finite_time_value = MIN(adpative_finite_time_value, 0);
+		}
+		_last_out += adpative_finite_time_value;  
+	}
 
 	
 	// Convert to centi-degrees and constrain
@@ -224,6 +238,76 @@ float AP_YawController::saturation(float x)
 		return x;
 	}
 	return x;
+}
+
+/*
+  Get pitch finite-time adaptive rule term
+ */
+float AP_YawController::_update_yaw_finite_time_adaptive_rule(float pid_sum, float error_dot, float error_int, float delta_time)
+{
+	// Calculate the adaptive_robust_rule to better deal with the uncertainties.
+	// tau = s + rho*sign(s); rho = K0 + K1*||xi|| + K2*||xi||^2; K_i_dot = ||s|| * ||xi||^i - alfa * K_i^v, i = 0,1,2;
+	// xi = [error, error_dot, error_int];
+
+	float error_delta = 0;
+/*	float alpha1 = 0;
+    float alpha2 = 0;
+	if (fabs(error)>_varepsYaw)
+	{
+		error_delta = pow(fabs(error), _gammaYaw)*sign(error);
+	}
+	else
+	{
+		alpha1 = (2-_gammaYaw)* pow(_varepsYaw, _gammaYaw-1);
+	    alpha2 = (_gammaYaw-1)* pow(_varepsYaw, _gammaYaw-2);
+		error_delta = alpha1*error + alpha2*sign(error)*pow(error, 2);
+	}  */
+
+	
+	float s       = pid_sum + _lambda3Yaw*error_delta; // s = error +  error_dot +  error_int + _lambda3Yaw*error_delta;
+	float norm_xi = sqrt( error_dot*error_dot + error_int*error_int);
+	float norm_s  = fabs(s);
+	
+	// Calculate sign(s), but avoid chattering
+	float sat_s = saturation(s / _upsilonYaw);
+ 	float rho = _intK0Yaw + _intK1Yaw * norm_xi + _intK2Yaw * norm_xi*norm_xi;
+
+	if (delta_time > 0) {
+		float intK0_delta = (norm_s - _betaYaw * pow(_intK0Yaw,_vYaw)) * delta_time;
+		float intK1_delta = (norm_s * norm_xi - _betaYaw * pow(_intK1Yaw,_vYaw)) * delta_time;
+		float intK2_delta = (norm_s * norm_xi*norm_xi - _betaYaw * pow(_intK2Yaw,_vYaw)) * delta_time;
+		// prevent the integrator from increasing if surface defln demand is above the upper limit
+		if (_last_out < -45 || _last_out > 45) {
+		float intK0_delta_temp = - _betaYaw * pow(_intK0Yaw,_vYaw) * delta_time;  //keep nagative     ruguo  lianggezhi xiangjia zhihou, meiyou fashengbaohe,  name jiubuyong decrease
+		float intK1_delta_temp = - _betaYaw * pow(_intK1Yaw,_vYaw) * delta_time;
+		float intK2_delta_temp = - _betaYaw * pow(_intK2Yaw,_vYaw) * delta_time;
+		float _intK0Yaw_temp = _intK0Yaw; _intK0Yaw_temp += intK0_delta_temp;
+		float _intK1Yaw_temp = _intK1Yaw; _intK1Yaw_temp += intK1_delta_temp;
+		float _intK2Yaw_temp = _intK2Yaw; _intK2Yaw_temp += intK2_delta_temp;
+		float rho_temp = _intK0Yaw_temp + _intK1Yaw_temp * norm_xi + _intK2Yaw_temp * norm_xi*norm_xi;
+		float _last_out_temp = _lambda3Yaw*error_delta + rho_temp * sat_s + _sigmaYaw*pow(fabs(s),_vYaw)*sign(s);   // printf("yaw 111111111111\n");
+		if (_last_out_temp < -45 || _last_out_temp > 45)
+		{
+			intK0_delta  = intK0_delta_temp;
+			intK1_delta  = intK1_delta_temp;
+			intK2_delta  = intK2_delta_temp;
+		}
+	}  
+		_intK0Yaw += intK0_delta;
+		_intK1Yaw += intK1_delta;
+		_intK2Yaw += intK2_delta;
+		if (_intK0Yaw < 0) {
+			_intK0Yaw = 0;
+		}
+		if (_intK1Yaw < 0) {
+			_intK1Yaw = 0;
+		}
+		if (_intK2Yaw < 0) {
+			_intK2Yaw = 0;
+		}
+	}
+
+	return _lambda3Yaw*error_delta + rho*sat_s + _sigmaYaw*pow(fabs(s),_vYaw)*sign(s);
 }
 
 /*

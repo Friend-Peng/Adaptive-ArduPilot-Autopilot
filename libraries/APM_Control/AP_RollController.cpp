@@ -148,7 +148,7 @@ int32_t AP_RollController::_get_rate_out(float desired_rate, float scaler, bool 
     _pid_info.target = desired_rate;
     _pid_info.actual = achieved_rate;
 
-	uint32_t _switch = 1;  //  0  original,     1  adaptive
+	uint32_t _switch = 2;  //  0  original,     1  adaptive
 	
 	// Get an airspeed estimate - default to zero if none available
 	float aspeed;
@@ -234,6 +234,20 @@ int32_t AP_RollController::_get_rate_out(float desired_rate, float scaler, bool 
 		} 
 		_last_out += adpative_robust_value;
 	}
+    
+    if (_switch == 2 ) 
+	{
+		float adpative_finite_time_value = _update_roll_finite_time_adaptive_rule(_last_out, _pid_info.P, _pid_info.D, _pid_info.I, delta_time);
+		if (_last_out < -45)   //_last_out still will exceed limitation range
+		{
+			adpative_finite_time_value = MAX(adpative_finite_time_value , 0);
+		}
+		else if (_last_out > 45)
+		{
+			adpative_finite_time_value = MIN(adpative_finite_time_value, 0);
+		}
+		_last_out += adpative_finite_time_value; 
+	}
 	
 	// Convert to centi-degrees and constrain
 	return constrain_float(_last_out * 100, -4500, 4500);
@@ -252,6 +266,79 @@ float AP_RollController::saturation(float x)
 	}
 	return x;
 }
+
+/*
+  Get roll finite-time adaptive rule term
+ */
+float AP_RollController::_update_roll_finite_time_adaptive_rule(float pid_sum, float error, float error_dot, float error_int, float delta_time)
+{
+	// Calculate the adaptive_robust_rule to better deal with the uncertainties.
+	// tau = s + rho*sign(s); rho = K0 + K1*||xi|| + K2*||xi||^2; K_i_dot = ||s|| * ||xi||^i - alfa * K_i^v, i = 0,1,2;
+	// xi = [error, error_dot, error_int];
+
+	float error_delta = 0;
+	float alpha1 = 0;
+    float alpha2 = 0;
+	if (fabs(error)>_varepsRoll)
+	{
+		error_delta = pow(fabs(error), _gammaRoll)*sign(error);
+	}
+	else
+	{
+		alpha1 = (2-_gammaRoll)* pow(_varepsRoll, _gammaRoll-1);
+	    alpha2 = (_gammaRoll-1)* pow(_varepsRoll, _gammaRoll-2);
+		error_delta = alpha1*error + alpha2*sign(error)*pow(error, 2);
+	}
+
+	
+	float s       = pid_sum + _lambda3Roll*error_delta; // s = error +  error_dot +  error_int + _lambda3Roll*error_delta;
+	float norm_xi = sqrt((fabs(error)+pow(fabs(error), _gammaRoll))*(fabs(error)+pow(fabs(error), _gammaRoll)) + error_dot*error_dot + error_int*error_int);
+	float norm_s  = fabs(s);
+	
+	// Calculate sign(s), but avoid chattering
+	float sat_s = saturation(s / _upsilonRoll);
+ 	float rho = _intK0Roll + _intK1Roll * norm_xi + _intK2Roll * norm_xi*norm_xi;
+
+
+	if (delta_time > 0) {
+		float intK0_delta = (norm_s - _betaRoll * pow(_intK0Roll,_vRoll)) * delta_time;
+		float intK1_delta = (norm_s * norm_xi - _betaRoll * pow(_intK1Roll,_vRoll)) * delta_time;
+		float intK2_delta = (norm_s * norm_xi*norm_xi - _betaRoll * pow(_intK2Roll,_vRoll)) * delta_time;
+		// prevent the integrator from increasing if surface defln demand is above the upper limit
+	if (_last_out < -45 || _last_out > 45) {
+		float intK0_delta_temp = - _betaRoll * pow(_intK0Roll,_vRoll) * delta_time;  //keep nagative     ruguo  lianggezhi xiangjia zhihou, meiyou fashengbaohe,  name jiubuyong decrease
+		float intK1_delta_temp = - _betaRoll * pow(_intK1Roll,_vRoll) * delta_time;
+		float intK2_delta_temp = - _betaRoll * pow(_intK2Roll,_vRoll) * delta_time;
+		float	_intK0Roll_temp = _intK0Roll;  _intK0Roll_temp += intK0_delta_temp;
+		float _intK1Roll_temp = _intK1Roll;  _intK1Roll_temp  +=  intK1_delta_temp;
+		float _intK2Roll_temp = _intK2Roll;  _intK2Roll_temp  +=  intK2_delta_temp;
+		float rho_temp = _intK0Roll_temp + _intK1Roll_temp * norm_xi + _intK2Roll_temp * norm_xi*norm_xi;
+		float _last_out_temp = _lambda3Roll*error_delta +  rho_temp * sat_s + _sigmaRoll*pow(fabs(s),_vRoll)*sign(s);   //  printf("roll 111111111111\n");
+		if (_last_out_temp < -45 || _last_out_temp > 45)
+		{
+			intK0_delta  = intK0_delta_temp;
+			intK1_delta  = intK1_delta_temp;
+			intK2_delta  = intK2_delta_temp;
+		}
+	}
+		_intK0Roll += intK0_delta;
+		_intK1Roll += intK1_delta;
+		_intK2Roll += intK2_delta;
+		if (_intK0Roll < 0) {
+		_intK0Roll = 0;
+		}
+		if (_intK1Roll < 0) {
+		_intK1Roll = 0;
+		}
+		if (_intK2Roll < 0) {
+		_intK2Roll = 0;
+		}
+	}
+
+
+	return _lambda3Roll*error_delta + rho*sat_s + _sigmaRoll*pow(fabs(s),_vRoll)*sign(s);
+}
+
 
 /*
   Get roll adaptive robust rule term
